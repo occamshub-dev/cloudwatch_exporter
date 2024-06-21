@@ -16,6 +16,11 @@ import software.amazon.awssdk.services.cloudwatch.model.Metric;
 
 final class DefaultDimensionSource implements DimensionSource {
 
+  class DimensionsAndAccounts {
+    List<List<Dimension>> dimensions;
+    List<String> accounts;
+  }
+
   private static final Logger LOGGER = Logger.getLogger(DefaultDimensionSource.class.getName());
   private final Counter cloudwatchRequests;
   private final CloudWatchClient cloudWatchClient;
@@ -33,9 +38,12 @@ final class DefaultDimensionSource implements DimensionSource {
         && rule.awsDimensionSelect.keySet().containsAll(rule.awsDimensions)
         && rule.awsTagSelect == null) {
       // The full list of dimensions is known so no need to request it from cloudwatch.
-      return new DimensionData(permuteDimensions(rule.awsDimensions, rule.awsDimensionSelect));
+      return new DimensionData(
+          permuteDimensions(rule.awsDimensions, rule.awsDimensionSelect), new ArrayList<>());
     } else {
-      return new DimensionData(listDimensions(rule, tagBasedResourceIds, cloudWatchClient));
+      DimensionsAndAccounts dimensionsAndAccounts =
+          listDimensions(rule, tagBasedResourceIds, cloudWatchClient);
+      return new DimensionData(dimensionsAndAccounts.dimensions, dimensionsAndAccounts.accounts);
     }
   }
 
@@ -62,17 +70,23 @@ final class DefaultDimensionSource implements DimensionSource {
     return result;
   }
 
-  private List<List<Dimension>> listDimensions(
+  private DimensionsAndAccounts listDimensions(
       MetricRule rule, List<String> tagBasedResourceIds, CloudWatchClient cloudWatchClient) {
     List<List<Dimension>> dimensions = new ArrayList<>();
+    List<String> accounts = new ArrayList<>();
     if (rule.awsDimensions == null) {
       dimensions.add(new ArrayList<>());
-      return dimensions;
+
+      DimensionsAndAccounts result = new DimensionsAndAccounts();
+      result.dimensions = dimensions;
+      result.accounts = accounts;
+      return result;
     }
 
     ListMetricsRequest.Builder requestBuilder = ListMetricsRequest.builder();
     requestBuilder.namespace(rule.awsNamespace);
     requestBuilder.metricName(rule.awsMetricName);
+    requestBuilder.includeLinkedAccounts(true);
 
     // 10800 seconds is 3 hours, this setting causes metrics older than 3 hours to not be listed
     if (rule.rangeSeconds < 10800) {
@@ -90,7 +104,8 @@ final class DefaultDimensionSource implements DimensionSource {
       requestBuilder.nextToken(nextToken);
       ListMetricsResponse response = cloudWatchClient.listMetrics(requestBuilder.build());
       cloudwatchRequests.labels("listMetrics", rule.awsNamespace).inc();
-      for (Metric metric : response.metrics()) {
+      for (int i = 0; i < response.metrics().size(); i++) {
+        Metric metric = response.metrics().get(i);
         if (metric.dimensions().size() != dimensionFilters.size()) {
           // AWS returns all the metrics with dimensions beyond the ones we ask for,
           // so filter them out.
@@ -98,6 +113,7 @@ final class DefaultDimensionSource implements DimensionSource {
         }
         if (useMetric(rule, tagBasedResourceIds, metric)) {
           dimensions.add(metric.dimensions());
+          accounts.add(response.owningAccounts().get(i));
         }
       }
       nextToken = response.nextToken();
@@ -108,7 +124,11 @@ final class DefaultDimensionSource implements DimensionSource {
               "(listDimensions) ignoring metric %s:%s due to dimensions mismatch",
               rule.awsNamespace, rule.awsMetricName));
     }
-    return dimensions;
+
+    DimensionsAndAccounts result = new DimensionsAndAccounts();
+    result.dimensions = dimensions;
+    result.accounts = accounts;
+    return result;
   }
 
   /**
@@ -123,6 +143,20 @@ final class DefaultDimensionSource implements DimensionSource {
       return false;
     }
     if (rule.awsTagSelect != null && !metricIsInAwsTagSelect(rule, tagBasedResourceIds, metric)) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Check if a metric should be used according to `aws_dimension_select`,
+   * `aws_dimension_select_regex` and dynamic `aws_tag_select`
+   */
+  private boolean useMetric(MetricRule rule, Metric metric) {
+    if (rule.awsDimensionSelect != null && !metricsIsInAwsDimensionSelect(rule, metric)) {
+      return false;
+    }
+    if (rule.awsDimensionSelectRegex != null && !metricIsInAwsDimensionSelectRegex(rule, metric)) {
       return false;
     }
     return true;

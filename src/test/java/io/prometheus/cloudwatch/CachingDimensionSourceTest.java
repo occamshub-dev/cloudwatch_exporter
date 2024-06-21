@@ -42,7 +42,8 @@ public class CachingDimensionSourceTest {
     public DimensionData getDimensions(MetricRule rule, List<String> tagBasedResourceIds) {
       called++;
       return new DimensionData(
-          List.of(List.of(Dimension.builder().name("AWS/Redshift").value("WriteIOPS").build())));
+          List.of(List.of(Dimension.builder().name("AWS/Redshift").value("WriteIOPS").build())),
+          Collections.emptyList());
     }
   }
 }

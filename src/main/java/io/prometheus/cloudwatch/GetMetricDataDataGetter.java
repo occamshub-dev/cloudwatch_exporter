@@ -31,6 +31,7 @@ class GetMetricDataDataGetter implements DataGetter {
   private final Counter metricsRequestedCounter;
   private final Map<String, MetricRuleData> results;
   private double metricRequestedForBilling;
+  private Map<String, String> index;
 
   private static String dimensionToString(Dimension d) {
     return String.format("%s=%s", d.name(), d.value());
@@ -56,14 +57,15 @@ class GetMetricDataDataGetter implements DataGetter {
   }
 
   private List<MetricDataQuery> buildMetricDataQueries(
-      MetricRule rule, List<List<Dimension>> dimensionsList) {
+      MetricRule rule, List<List<Dimension>> dimensionsList, List<String> accountsList) {
     List<MetricDataQuery> queries = new ArrayList<>();
     List<String> stats = buildStatsList(rule);
     for (String stat : stats) {
-      for (List<Dimension> dl : dimensionsList) {
+      for (int i = 0; i < dimensionsList.size(); i++) {
+        List<Dimension> dl = dimensionsList.get(i);
         Metric metric = buildMetric(dl);
         MetricStat metricStat = buildMetricStat(stat, metric);
-        MetricDataQuery query = buildQuery(stat, dl, metricStat);
+        MetricDataQuery query = buildQueries(stat, dl, accountsList.get(i), metricStat);
         queries.add(query);
       }
     }
@@ -76,6 +78,21 @@ class GetMetricDataDataGetter implements DataGetter {
     String id = "i" + UUID.randomUUID().toString().replace("-", "");
     MetricDataQuery.Builder builder = MetricDataQuery.builder();
     builder.id(id);
+
+    // important - used to locate back the results
+    String label = MetricLabels.labelFor(stat, dl);
+    builder.label(label);
+    builder.metricStat(metric);
+    return builder.build();
+  }
+
+  private MetricDataQuery buildQueries(
+      String stat, List<Dimension> dl, String accountId, MetricStat metric) {
+    // random id - we don't care about it
+    String id = "i" + UUID.randomUUID().toString().replace("-", "");
+    MetricDataQuery.Builder builder = MetricDataQuery.builder();
+    builder.id(id);
+    builder.accountId(accountId);
 
     // important - used to locate back the results
     String label = MetricLabels.labelFor(stat, dl);
@@ -116,14 +133,14 @@ class GetMetricDataDataGetter implements DataGetter {
   }
 
   private List<GetMetricDataRequest> buildMetricDataRequests(
-      MetricRule rule, List<List<Dimension>> dimensionsList) {
+      MetricRule rule, List<List<Dimension>> dimensionsList, List<String> accountsList) {
     Date startDate = new Date(start - 1000L * rule.delaySeconds);
     Date endDate = new Date(start - 1000L * (rule.delaySeconds + rule.rangeSeconds));
     GetMetricDataRequest.Builder builder = GetMetricDataRequest.builder();
     builder.endTime(startDate.toInstant());
     builder.startTime(endDate.toInstant());
     builder.scanBy(ScanBy.TIMESTAMP_DESCENDING);
-    List<MetricDataQuery> queries = buildMetricDataQueries(rule, dimensionsList);
+    List<MetricDataQuery> queries = buildMetricDataQueries(rule, dimensionsList, accountsList);
     List<GetMetricDataRequest> requests = new ArrayList<>();
     for (List<MetricDataQuery> queriesPartition :
         partitionByMaxSize(queries, MAX_QUERIES_PER_REQUEST)) {
@@ -132,12 +149,23 @@ class GetMetricDataDataGetter implements DataGetter {
     return requests;
   }
 
-  private Map<String, MetricRuleData> fetchAllDataPoints(List<List<Dimension>> dimensionsList) {
+  private Map<String, MetricRuleData> fetchAllDataPoints(
+      List<List<Dimension>> dimensionsList, List<String> accountsList) {
     List<MetricDataResult> results = new ArrayList<>();
-    for (GetMetricDataRequest request : buildMetricDataRequests(rule, dimensionsList)) {
+    List<GetMetricDataRequest> requests =
+        buildMetricDataRequests(rule, dimensionsList, accountsList);
+    for (GetMetricDataRequest request : requests) {
+      for (MetricDataQuery query : request.metricDataQueries()) {
+        index.put(query.id(), query.accountId());
+      }
       GetMetricDataResponse response = client.getMetricData(request);
       apiRequestsCounter.labels("getMetricData", rule.awsNamespace).inc();
-      results.addAll(response.metricDataResults());
+      for (MetricDataResult metricDataResult : response.metricDataResults()) {
+        if (metricDataResult.timestamps().isEmpty() || metricDataResult.values().isEmpty()) {
+          continue;
+        }
+        results.add(metricDataResult);
+      }
     }
     metricsRequestedCounter
         .labels(rule.awsMetricName, rule.awsNamespace)
@@ -164,6 +192,7 @@ class GetMetricDataDataGetter implements DataGetter {
       } else {
         metricRuleData.statisticValues.put(stat, value);
       }
+      String account = index.get(dataResult.id());
       res.put(labelsKey, metricRuleData);
     }
     return res;
@@ -175,14 +204,16 @@ class GetMetricDataDataGetter implements DataGetter {
       MetricRule rule,
       Counter apiRequestsCounter,
       Counter metricsRequestedCounter,
-      List<List<Dimension>> dimensionsList) {
+      List<List<Dimension>> dimensionsList,
+      List<String> accountsList) {
+    this.index = new HashMap<>();
     this.client = client;
     this.start = start;
     this.rule = rule;
     this.apiRequestsCounter = apiRequestsCounter;
     this.metricsRequestedCounter = metricsRequestedCounter;
     this.metricRequestedForBilling = 0d;
-    this.results = fetchAllDataPoints(dimensionsList);
+    this.results = fetchAllDataPoints(dimensionsList, accountsList);
   }
 
   @Override

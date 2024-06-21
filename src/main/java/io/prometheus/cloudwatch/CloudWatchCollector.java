@@ -472,7 +472,6 @@ public class CloudWatchCollector extends Collector implements Describable {
 
   private void scrape(List<MetricFamilySamples> mfs) {
     ActiveConfig config = new ActiveConfig(activeConfig);
-    Set<String> publishedResourceInfo = new HashSet<>();
 
     long start = System.currentTimeMillis();
     List<MetricFamilySamples.Sample> infoSamples = new ArrayList<>();
@@ -502,8 +501,15 @@ public class CloudWatchCollector extends Collector implements Describable {
       List<String> tagBasedResourceIds =
           extractResourceIds(arnResourceIdRegexp, resourceTagMappings);
 
-      List<List<Dimension>> dimensionList =
-          config.dimensionSource.getDimensions(rule, tagBasedResourceIds).getDimensions();
+      HashMap<String, ResourceTagMapping> indexByResourceId = new HashMap<>();
+      for (int i=0; i<resourceTagMappings.size(); i++) {
+          indexByResourceId.put(tagBasedResourceIds.get(i), resourceTagMappings.get(i));
+      }
+
+      DimensionSource.DimensionData dimensionData =
+          config.dimensionSource.getDimensions(rule, tagBasedResourceIds);
+      List<List<Dimension>> dimensionList = dimensionData.getDimensions();
+      List<String> accountsList = dimensionData.getAccounts();
       DataGetter dataGetter = null;
       if (rule.useGetMetricData) {
         dataGetter =
@@ -513,7 +519,8 @@ public class CloudWatchCollector extends Collector implements Describable {
                 rule,
                 cloudwatchRequests,
                 cloudwatchMetricsRequested,
-                dimensionList);
+                dimensionList,
+                accountsList);
       } else {
         dataGetter =
             new GetMetricStatisticsDataGetter(
@@ -539,6 +546,13 @@ public class CloudWatchCollector extends Collector implements Describable {
         for (Dimension d : dimensions) {
           labelNames.add(safeLabelName(toSnakeCase(d.name())));
           labelValues.add(d.value());
+
+          if (indexByResourceId.containsKey(d.value())) {
+            for (Tag tag : indexByResourceId.get(d.value()).tags()) {
+              labelNames.add("tag_" + safeLabelName(tag.key()));
+              labelValues.add(tag.value());
+            }
+          }
         }
 
         Long timestamp = null;
@@ -621,6 +635,8 @@ public class CloudWatchCollector extends Collector implements Describable {
       }
 
       // Add the "aws_resource_info" metric for existing tag mappings
+      /* This is now included in self metrics
+      Set<String> publishedResourceInfo = new HashSet<>();
       for (ResourceTagMapping resourceTagMapping : resourceTagMappings) {
         if (!publishedResourceInfo.contains(resourceTagMapping.resourceARN())) {
           List<String> labelNames = new ArrayList<>();
@@ -649,6 +665,7 @@ public class CloudWatchCollector extends Collector implements Describable {
           publishedResourceInfo.add(resourceTagMapping.resourceARN());
         }
       }
+      */
     }
     mfs.add(
         new MetricFamilySamples(

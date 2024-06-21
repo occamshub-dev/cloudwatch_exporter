@@ -9,13 +9,19 @@ interface DimensionSource {
 
   class DimensionData {
     private final List<List<Dimension>> dimensions;
+    private final List<String> accounts;
 
-    DimensionData(List<List<Dimension>> dimensions) {
+    DimensionData(List<List<Dimension>> dimensions, List<String> accounts) {
       this.dimensions = dimensions;
+      this.accounts = accounts;
     }
 
     List<List<Dimension>> getDimensions() {
       return dimensions;
+    }
+
+    List<String> getAccounts() {
+      return accounts;
     }
   }
 }

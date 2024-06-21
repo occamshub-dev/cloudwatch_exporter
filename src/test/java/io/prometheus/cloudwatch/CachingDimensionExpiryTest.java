@@ -13,7 +13,7 @@ import org.junit.Test;
 public class CachingDimensionExpiryTest {
 
   private final DimensionSource.DimensionData emptyData =
-      new DimensionSource.DimensionData(Collections.emptyList());
+      new DimensionSource.DimensionData(Collections.emptyList(), Collections.emptyList());
 
   @Test
   public void expireAfterCreateUsesDefaultWithEmptyOverrides() {

@@ -18,7 +18,7 @@ COPY . /cloudwatch_exporter
 # ARM64: https://github.com/openzipkin/docker-java/issues/34#issuecomment-721673618
 ENV MAVEN_OPTS "-Djdk.lang.Process.launchMechanism=vfork"
 
-RUN mvn package \
+RUN mvn package -DskipTests \
  && mv target/cloudwatch_exporter-*-with-dependencies.jar /cloudwatch_exporter.jar
 
 FROM eclipse-temurin:17-jre-focal as runner
