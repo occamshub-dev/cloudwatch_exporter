@@ -52,19 +52,55 @@ public class CloudWatchCollector extends Collector implements Describable {
       Pattern.compile("(?:([^:/]+)|[^:/]+/([^:]+))$");
 
   static class ActiveConfig {
+    Map<String, Object> config;
     ArrayList<MetricRule> rules;
     CloudWatchClient cloudWatchClient;
     ResourceGroupsTaggingApiClient taggingClient;
     DimensionSource dimensionSource;
+    Map<String, ResourceGroupsTaggingApiClient> taggingClients = new HashMap<>();
+
+    private AwsCredentialsProvider getRoleCredentialProvider(Map<String, Object> config, String accountId) {
+      StsClient stsClient =
+          StsClient.builder().region(Region.of((String) config.get("region"))).build();
+      String role = "arn:aws:iam::" + accountId + ":role/" + config.get("role_name_tag");
+      AssumeRoleRequest assumeRoleRequest =
+          AssumeRoleRequest.builder()
+              .roleArn(role)
+              .roleSessionName("cloudwatch_exporter")
+              .build();
+      return StsAssumeRoleCredentialsProvider.builder()
+          .stsClient(stsClient)
+          .refreshRequest(assumeRoleRequest)
+          .build();
+    }
 
     public ActiveConfig(ActiveConfig cfg) {
       this.rules = new ArrayList<>(cfg.rules);
+      this.config = cfg.config;
       this.cloudWatchClient = cfg.cloudWatchClient;
       this.taggingClient = cfg.taggingClient;
       this.dimensionSource = cfg.dimensionSource;
     }
 
     public ActiveConfig() {}
+
+    public ResourceGroupsTaggingApiClient getTaggingClient(String accountId) {
+      if (!taggingClients.containsKey(accountId)) {
+        taggingClients.get(accountId);
+      }
+      ResourceGroupsTaggingApiClientBuilder clientBuilder =
+          ResourceGroupsTaggingApiClient.builder();
+
+      if (config.containsKey("role_name_tag")) {
+        clientBuilder.credentialsProvider(getRoleCredentialProvider(config, accountId));
+      }
+      String region = (String) config.get("region");
+      if (region != null) {
+        clientBuilder.region(Region.of(region));
+      }
+      taggingClients.put(accountId, clientBuilder.build());
+      return taggingClients.get(accountId);
+    }
   }
 
   static class AWSTagSelect {
@@ -343,19 +379,21 @@ public class CloudWatchCollector extends Collector implements Describable {
       dimensionSource = new CachingDimensionSource(dimensionSource, metricCacheConfig);
     }
 
-    loadConfig(rules, cloudWatchClient, taggingClient, dimensionSource);
+    loadConfig(rules, cloudWatchClient, taggingClient, dimensionSource, config);
   }
 
   private void loadConfig(
       ArrayList<MetricRule> rules,
       CloudWatchClient cloudWatchClient,
       ResourceGroupsTaggingApiClient taggingClient,
-      DimensionSource dimensionSource) {
+      DimensionSource dimensionSource,
+      Map<String, Object> config) {
     synchronized (activeConfig) {
       activeConfig.cloudWatchClient = cloudWatchClient;
       activeConfig.taggingClient = taggingClient;
       activeConfig.rules = rules;
       activeConfig.dimensionSource = dimensionSource;
+      activeConfig.config = config;
     }
   }
 
@@ -402,6 +440,43 @@ public class CloudWatchCollector extends Collector implements Describable {
 
       paginationToken = response.paginationToken();
     } while (paginationToken != null && !paginationToken.isEmpty());
+
+    return resourceTagMappings;
+  }
+
+  private List<ResourceTagMapping> getResourceTagMappings(
+      MetricRule rule, ActiveConfig config, List<String> accounts) {
+
+    List<ResourceTagMapping> resourceTagMappings = new ArrayList<>();
+    for (String accountId : new HashSet<>(accounts)) {
+      if (rule.awsTagSelect == null) {
+        return Collections.emptyList();
+      }
+
+      List<TagFilter> tagFilters = new ArrayList<>();
+      if (rule.awsTagSelect.tagSelections != null) {
+        for (Entry<String, List<String>> entry : rule.awsTagSelect.tagSelections.entrySet()) {
+          tagFilters.add(TagFilter.builder().key(entry.getKey()).values(entry.getValue()).build());
+        }
+      }
+
+      GetResourcesRequest.Builder requestBuilder =
+          GetResourcesRequest.builder()
+              .tagFilters(tagFilters)
+              .resourceTypeFilters(rule.awsTagSelect.resourceTypeSelection);
+      String paginationToken = "";
+      do {
+        requestBuilder.paginationToken(paginationToken);
+
+        GetResourcesResponse response = config.getTaggingClient(accountId).getResources(requestBuilder.build());
+        taggingApiRequests.labels("getResources", rule.awsTagSelect.resourceTypeSelection).inc();
+
+        resourceTagMappings.addAll(response.resourceTagMappingList());
+
+        paginationToken = response.paginationToken();
+      } while (paginationToken != null && !paginationToken.isEmpty());
+
+    }
 
     return resourceTagMappings;
   }
@@ -495,8 +570,13 @@ public class CloudWatchCollector extends Collector implements Describable {
         baseName += "_index";
       }
 
+      DimensionSource.DimensionData dimensionData =
+          config.dimensionSource.getDimensions(rule, new ArrayList<>());
+      List<List<Dimension>> dimensionList = dimensionData.getDimensions();
+      List<String> accountsList = dimensionData.getAccounts();
+
       List<ResourceTagMapping> resourceTagMappings =
-          getResourceTagMappings(rule, config.taggingClient);
+          getResourceTagMappings(rule, config, accountsList);
       Pattern arnResourceIdRegexp = getArnResourceIdRegexp(rule);
       List<String> tagBasedResourceIds =
           extractResourceIds(arnResourceIdRegexp, resourceTagMappings);
@@ -506,10 +586,6 @@ public class CloudWatchCollector extends Collector implements Describable {
           indexByResourceId.put(tagBasedResourceIds.get(i), resourceTagMappings.get(i));
       }
 
-      DimensionSource.DimensionData dimensionData =
-          config.dimensionSource.getDimensions(rule, tagBasedResourceIds);
-      List<List<Dimension>> dimensionList = dimensionData.getDimensions();
-      List<String> accountsList = dimensionData.getAccounts();
       DataGetter dataGetter = null;
       if (rule.useGetMetricData) {
         dataGetter =

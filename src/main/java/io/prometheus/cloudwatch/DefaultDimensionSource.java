@@ -142,9 +142,11 @@ final class DefaultDimensionSource implements DimensionSource {
     if (rule.awsDimensionSelectRegex != null && !metricIsInAwsDimensionSelectRegex(rule, metric)) {
       return false;
     }
+    /* DO NOT FILTER BY TAG
     if (rule.awsTagSelect != null && !metricIsInAwsTagSelect(rule, tagBasedResourceIds, metric)) {
       return false;
     }
+     */
     return true;
   }
 
