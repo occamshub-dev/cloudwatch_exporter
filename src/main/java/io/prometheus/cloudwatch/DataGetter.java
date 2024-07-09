@@ -9,6 +9,7 @@ import software.amazon.awssdk.services.cloudwatch.model.Statistic;
 
 interface DataGetter {
   MetricRuleData metricRuleDataFor(List<Dimension> dimensions);
+  String getAccountForDimension(Dimension dimension);
 
   class MetricRuleData {
     Map<Statistic, Double> statisticValues;

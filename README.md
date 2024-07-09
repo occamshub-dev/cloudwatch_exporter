@@ -69,6 +69,7 @@ Name     | Description
 ---------|------------
 region   | Optional. The AWS region to connect to. If none is provided, an attempt will be made to determine the region from the [default region provider chain](https://docs.aws.amazon.com/sdk-for-java/v1/developer-guide/java-dg-region-selection.html#default-region-provider-chain).
 role_arn   | Optional. The AWS role to assume. Useful for retrieving cross account metrics.
+role_name_tag   | Optional. The AWS role name to assume by account. Useful for retrieving resource tags.
 metrics  | Required. A list of CloudWatch metrics to retrieve and export
 aws_namespace  | Required. Namespace of the CloudWatch metric.
 aws_metric_name  | Required. Metric name of the CloudWatch metric.

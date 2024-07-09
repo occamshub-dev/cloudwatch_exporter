@@ -32,6 +32,7 @@ class GetMetricDataDataGetter implements DataGetter {
   private final Map<String, MetricRuleData> results;
   private double metricRequestedForBilling;
   private Map<String, String> index;
+  private Map<String, String> accountIndex;
 
   private static String dimensionToString(Dimension d) {
     return String.format("%s=%s", d.name(), d.value());
@@ -170,7 +171,22 @@ class GetMetricDataDataGetter implements DataGetter {
     metricsRequestedCounter
         .labels(rule.awsMetricName, rule.awsNamespace)
         .inc(metricRequestedForBilling);
+
+    mapAccounts(results);
     return toMap(results);
+  }
+
+  private void mapAccounts(List<MetricDataResult> metricDataResults) {
+    Map<String, String> res = new HashMap<>();
+    for (MetricDataResult dataResult : metricDataResults) {
+      if (dataResult.timestamps().isEmpty() || dataResult.values().isEmpty()) {
+        continue;
+      }
+      StatAndDimensions statAndDimensions = MetricLabels.decode(dataResult.label());
+      String labelsKey = statAndDimensions.dimetionsAsString;
+      res.put(labelsKey, index.get(dataResult.id()));
+    }
+    accountIndex = res;
   }
 
   private Map<String, MetricRuleData> toMap(List<MetricDataResult> metricDataResults) {
@@ -207,6 +223,7 @@ class GetMetricDataDataGetter implements DataGetter {
       List<List<Dimension>> dimensionsList,
       List<String> accountsList) {
     this.index = new HashMap<>();
+    this.accountIndex = new HashMap<>();
     this.client = client;
     this.start = start;
     this.rule = rule;
@@ -219,6 +236,10 @@ class GetMetricDataDataGetter implements DataGetter {
   @Override
   public MetricRuleData metricRuleDataFor(List<Dimension> dimensions) {
     return results.get(dimensionsToKey(dimensions));
+  }
+
+  public String getAccountForDimension(Dimension dimension) {
+    return accountIndex.get(dimensionToString(dimension));
   }
 
   private static class StatAndDimensions {

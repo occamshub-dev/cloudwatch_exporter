@@ -31,6 +31,10 @@ class GetMetricStatisticsDataGetter implements DataGetter {
     this.metricsRequestedCounter = metricsRequestedCounter;
   }
 
+  public String getAccountForDimension(Dimension dimension) {
+    return null;
+  }
+
   private GetMetricStatisticsRequest.Builder metricStatisticsRequestBuilder() {
     Date startDate = new Date(start - 1000 * rule.delaySeconds);
     Date endDate = new Date(start - 1000 * (rule.delaySeconds + rule.rangeSeconds));
