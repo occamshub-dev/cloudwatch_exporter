@@ -184,7 +184,9 @@ class GetMetricDataDataGetter implements DataGetter {
       }
       StatAndDimensions statAndDimensions = MetricLabels.decode(dataResult.label());
       String labelsKey = statAndDimensions.dimetionsAsString;
-      res.put(labelsKey, index.get(dataResult.id()));
+      for (String dim : labelsKey.split(",")) {
+        res.put(dim, index.get(dataResult.id()));
+      }
     }
     accountIndex = res;
   }

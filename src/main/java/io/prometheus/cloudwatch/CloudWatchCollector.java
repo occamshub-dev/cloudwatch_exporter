@@ -622,8 +622,14 @@ public class CloudWatchCollector extends Collector implements Describable {
         for (Dimension d : dimensions) {
           labelNames.add(safeLabelName(toSnakeCase(d.name())));
           labelValues.add(d.value());
-          labelNames.add("account_id");
-          labelValues.add(dataGetter.getAccountForDimension(d));
+
+          String account = dataGetter.getAccountForDimension(d);
+          if (account != null) {
+            if (!labelNames.contains("account_id")) {
+              labelNames.add("account_id");
+              labelValues.add(account);
+            }
+          }
 
           if (indexByResourceId.containsKey(d.value())) {
             for (Tag tag : indexByResourceId.get(d.value()).tags()) {
